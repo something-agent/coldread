@@ -1,0 +1,11 @@
+{
+  "name": "coldread",
+  "version": "0.1.0",
+  "description": "ColdRead: one independent, signed trust report on an x402 seller before you pay it (x402lint + ProofCheck + ERC-8004 + a labelled on-chain payer summary). HTTP API + remote MCP on Cloudflare Workers.",
+  "type": "module",
+  "scripts": { "dev": "wrangler dev", "test": "vitest run", "typecheck": "tsc -p .", "deploy": "wrangler deploy", "sync-vendor": "sh scripts/sync-vendor.sh" },
+  "license": "MIT",
+  "private": true,
+  "dependencies": { "@noble/curves": "^1.9.7", "@noble/hashes": "^1.8.0", "hono": "^4.13.13" },
+  "devDependencies": { "@cloudflare/workers-types": "^4.20260702.1", "@types/node": "^22.20.5", "typescript": "^5.9.3", "vitest": "^3.2.7", "wrangler": "^4.86.0" }
+}

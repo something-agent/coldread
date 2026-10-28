@@ -1,0 +1,1 @@
+{"@context":["https://www.w3.org/ns/did/v1","https://w3id.org/security/suites/jws-2020/v1"],"id":"did:web:mart402.com","verificationMethod":[{"id":"did:web:mart402.com#key-1","type":"JsonWebKey2020","controller":"did:web:mart402.com","publicKeyJwk":{"kty":"OKP","crv":"Ed25519","x":"osdiih4mXxHQPfVzCNz8StRgc-_Aozr2ReqOhOuLhJQ"}}],"assertionMethod":["did:web:mart402.com#key-1"]}

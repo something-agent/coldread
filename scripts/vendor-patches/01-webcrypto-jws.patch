@@ -1,0 +1,47 @@
+diff -ru a/src/vendor/proofcheck/jws.ts vendor/proofcheck/jws.ts
+--- a/src/vendor/proofcheck/jws.ts	2026-10-28 12:50:58.799710379 -0500
++++ b/src/vendor/proofcheck/jws.ts	2026-10-28 12:50:58.799710379 -0500
+@@ -68,3 +68,22 @@
+     return { ok: false, reason: (e as Error).message };
+   }
+ }
++
++/** ColdRead patch: verify Ed25519 and P-256 with WebCrypto (native; the pure-JS path costs tens of ms of
++ *  Worker CPU). Falls back to verifyJws when WebCrypto refuses the key or algorithm. Same verdicts. */
++export async function verifyJwsFast(p: ParsedJws, key: PubKey): Promise<{ ok: boolean; reason?: string }> {
++  const want = ALG_KIND[String(p.header.alg)];
++  const subtle = (globalThis as any).crypto?.subtle as SubtleCrypto | undefined;
++  if (!subtle || want !== key.kind || p.signature.length !== 64) return verifyJws(p, key);
++  try {
++    if (key.kind === "ed25519" && key.bytes.length === 32) {
++      const k = await subtle.importKey("raw", key.bytes, { name: "Ed25519" }, false, ["verify"]);
++      return { ok: await subtle.verify({ name: "Ed25519" }, k, p.signature, p.signingInput) };
++    }
++    if (key.kind === "p256" && key.bytes.length === 65 && key.bytes[0] === 4) {
++      const k = await subtle.importKey("raw", key.bytes, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
++      return { ok: await subtle.verify({ name: "ECDSA", hash: "SHA-256" }, k, p.signature, p.signingInput) };
++    }
++  } catch { /* fall through */ }
++  return verifyJws(p, key);
++}
+diff -ru a/src/vendor/proofcheck/verify.ts vendor/proofcheck/verify.ts
+--- a/src/vendor/proofcheck/verify.ts	2026-10-28 12:50:58.799710379 -0500
++++ b/src/vendor/proofcheck/verify.ts	2026-10-28 12:50:58.799710379 -0500
+@@ -2,7 +2,7 @@
+ import { isAddress, lc } from "./bytes";
+ import { Evidence, applyRevocation, Signer, gatherEvidence, sameKey, summarize, independentRoots } from "./auth";
+ import { offerDigest, receiptDigest, recoverSigner, OfferPayload, ReceiptPayload } from "./eip712";
+-import { parseJws, verifyJws, PubKey } from "./jws";
++import { parseJws, verifyJwsFast, PubKey } from "./jws";
+ import { resolveKid } from "./did";
+ import { hostOf } from "./util";
+ 
+@@ -54,7 +54,7 @@
+       let res: Awaited<ReturnType<typeof resolveKid>>;
+       try { res = await resolveKid(kid, ctx.fetchImpl); } catch (e) { return { ok: false, payload: p.payload, signer: null, ident: { kid }, checks: [fail("kid_resolution", `cannot resolve kid: ${(e as Error).message}`)] }; }
+       let matched: PubKey | null = null; let lastReason = "";
+-      for (const k of res.keys) { const v = verifyJws(p, k); if (v.ok) { matched = k; break; } lastReason = v.reason ?? lastReason; }
++      for (const k of res.keys) { const v = await verifyJwsFast(p, k); if (v.ok) { matched = k; break; } lastReason = v.reason ?? lastReason; }
+       if (!matched) return { ok: false, payload: p.payload, signer: null, ident: { kid }, checks: [fail("signature", `JWS (${p.header.alg}) did not verify against ${res.keys.length} key(s) from ${res.method}${lastReason ? `: ${lastReason}` : ""}`)] };
+       checks.push(pass("signature", `JWS ${p.header.alg} verifies with key from ${kid}`));
+       return { ok: true, payload: p.payload, signer: { evm: matched.evmAddress, pub: matched }, ident: { kid, address: matched.evmAddress, key_type: matched.kind }, checks, kidDomain: res.domain, kidMethod: res.method };

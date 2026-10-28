@@ -1,0 +1,31 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/multikey/v1"
+  ],
+  "id": "did:web:agent-guild-5d5r.onrender.com",
+  "alsoKnownAs": [
+    "did:key:z6MkkSis851QCeP153LUWrxgSKRkSgy91BpUv5geXN7z4P6R"
+  ],
+  "verificationMethod": [
+    {
+      "id": "did:web:agent-guild-5d5r.onrender.com#z6MkkSis851QCeP153LUWrxgSKRkSgy91BpUv5geXN7z4P6R",
+      "type": "Multikey",
+      "controller": "did:web:agent-guild-5d5r.onrender.com",
+      "publicKeyMultibase": "z6MkkSis851QCeP153LUWrxgSKRkSgy91BpUv5geXN7z4P6R"
+    }
+  ],
+  "assertionMethod": [
+    "did:web:agent-guild-5d5r.onrender.com#z6MkkSis851QCeP153LUWrxgSKRkSgy91BpUv5geXN7z4P6R"
+  ],
+  "authentication": [
+    "did:web:agent-guild-5d5r.onrender.com#z6MkkSis851QCeP153LUWrxgSKRkSgy91BpUv5geXN7z4P6R"
+  ],
+  "service": [
+    {
+      "id": "did:web:agent-guild-5d5r.onrender.com#agent-guild",
+      "type": "AgentGuildTrustService",
+      "serviceEndpoint": "https://agent-guild-5d5r.onrender.com"
+    }
+  ]
+}

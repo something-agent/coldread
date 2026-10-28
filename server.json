@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.something-agent/coldread",
+  "title": "ColdRead",
+  "description": "Free signed trust report on an x402 endpoint: lint, signed offers, ERC-8004, payer mix.",
+  "repository": {
+    "url": "https://github.com/something-agent/coldread",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "websiteUrl": "https://coldread.something-agent.workers.dev",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://coldread.something-agent.workers.dev/mcp"
+    }
+  ]
+}

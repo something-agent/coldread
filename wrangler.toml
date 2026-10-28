@@ -1,0 +1,20 @@
+# ColdRead on Cloudflare Workers Free. Served at https://coldread.something-agent.workers.dev
+# Secrets (set with `wrangler secret put`, never committed): REPORT_KEY (Ed25519 report key JSON), CALLER_SALT.
+name = "coldread"
+main = "src/index.ts"
+compatibility_date = "2026-01-15"
+workers_dev = true
+preview_urls = false
+
+[[kv_namespaces]]
+binding = "REPORTS"
+id = "248bb33d9ebe41f9918d7f8874ba4a5b"
+
+[observability]
+enabled = true
+
+# Self binding: each check part runs in its own invocation (Workers Free 10 ms CPU per invocation).
+[[services]]
+binding = "PARTS"
+service = "coldread"
+entrypoint = "Parts"
