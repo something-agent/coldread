@@ -48,7 +48,7 @@ The envelope is `{ report, digest, signature }`:
 
 `verify.mjs` is a single file with no dependencies (Node ≥ 18). `--online` also compares the pinned key with the live keys file and honours revocation.
 
-**Anchoring.** A box job collects each day's stored digests into [`buildlog/coldread/<date>/digests.txt`](https://github.com/something-agent/buildlog/tree/main/coldread) and stamps the file with OpenTimestamps (Bitcoin). A report whose digest is in an anchored file existed by that block. Anchoring is batched daily, so a fresh report says `anchor.status: "pending"`.
+**Anchoring.** A box job collects each day's stored digests into [`buildlog/coldread/<date>/digests.txt`](https://github.com/something-agent/buildlog/tree/main/coldread) and stamps the file with OpenTimestamps (Bitcoin). A report whose digest is in an anchored file existed by that block. Anchoring is batched daily, so a fresh report says `anchor.status: "pending"`. Each batch run also writes an immutable `digests-<HHMM>Z.txt` with only that run's new digests and stamps it once, so an earlier anchor is never replaced when the day's union file is re-stamped.
 
 ## Limits (honest list)
 

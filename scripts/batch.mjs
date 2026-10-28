@@ -59,6 +59,11 @@ if (!has("--no-anchor") && digests.length) {
   else {
     writeFileSync(f, all.join("\n") + "\n");
     const sh = (cmd, args, cwd = BUILDLOG) => spawnSync(cmd, args, { cwd, encoding: "utf8" });
+    // Immutable per-run file with only the new digests: its proof is never replaced, so an earlier anchor is not
+    // lost when later reports arrive the same day (digests.txt is re-stamped as a convenience union).
+    const added = all.filter((d) => !prev.includes(d));
+    const part = join(dir, `digests-${new Date().toISOString().slice(11, 16).replace(":", "")}Z.txt`);
+    if (added.length && !existsSync(part)) { writeFileSync(part, added.join("\n") + "\n"); const sp = sh(OTS, ["stamp", part]); log(`ots stamp ${added.length} new digest(s) in ${part.split("/").pop()}:`, sp.status === 0 ? "ok" : (sp.stderr || "").slice(0, 200)); }
     sh("rm", ["-f", f + ".ots"]);
     const s = sh(OTS, ["stamp", f]);
     log("ots stamp:", s.status === 0 ? "ok" : (s.stderr || "").slice(0, 200));
