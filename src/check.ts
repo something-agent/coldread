@@ -11,7 +11,7 @@ import { wellKnownRegistration } from "./vendor/proofcheck/did";
 import { payerSummary, BASE_USDC, BASE_CAIP2 } from "./payers";
 import VERSIONS from "./vendor/VERSIONS.json";
 
-export const SERVICE = { name: "ColdRead", version: "0.1.0", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
+export const SERVICE = { name: "ColdRead", version: "0.1.1", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
 export const REPORT_VERSION = "coldread/1";
 export const SUBREQUEST_BUDGET = 45; // Workers Free: 50 per invocation, keep a margin for storage
 

@@ -7,7 +7,7 @@
     "url": "https://github.com/something-agent/coldread",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://coldread.something-agent.workers.dev",
   "remotes": [
     {

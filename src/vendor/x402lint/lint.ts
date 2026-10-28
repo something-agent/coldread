@@ -252,13 +252,16 @@ export async function lintEndpoint(rawUrl: string, o: { method?: "auto" | "GET" 
       // well-known cross-check
       if (wk.r?.status === 200) {
         const txt = dec.decode(wk.r.body).toLowerCase();
-        const missing = [...new Set((parsed.pr.accepts ?? []).map((a: any) => String(a.payTo ?? "").toLowerCase()).filter(Boolean))].filter((x: any) => !txt.includes(x));
-        if (missing.length && !/0x[0-9a-f]{40}/.test(txt)) f.push(F("X010", "info", "/.well-known/x402 exists but lists no payTo address, so it cannot be cross-checked against the live challenge.", undefined, "/.well-known/x402"));
+        const missing = [...new Set((parsed.pr.accepts ?? []).map((a: any) => String(a.payTo ?? "").toLowerCase()).filter(Boolean))].filter((x: any) => !wellKnownAddresses(txt).includes(x) && !(!/^0x[0-9a-f]{40}$/.test(x) && txt.includes(x)));
+        // Only standalone addresses count as payTo candidates: a JSON string value that IS an address (or, for non-JSON
+        // files, a 40-hex run with no hex on either side). Not a pool address inside a resource URL's query string, and not
+        // the first 40 hex chars of a 65-byte signature in ownershipProofs. (False "mismatch" on AcePilot and ottoai, 2026-10-28.)
+        const wkAddrs = wellKnownAddresses(txt);
+        if (missing.length && !wkAddrs.length) f.push(F("X010", "info", "/.well-known/x402 exists but lists no payTo address, so it cannot be cross-checked against the live challenge.", undefined, "/.well-known/x402"));
         else if (missing.length) f.push(F("X010", "warn", `/.well-known/x402 exists but does not mention payTo ${missing.map((m: any) => m.slice(0, 10) + "…").join(", ")} from the live challenge.`, "Keep the well-known file and the live challenge in sync.", "/.well-known/x402"));
         // The reverse direction: addresses in the well-known file that this route's challenge does not use.
         // Fine if other routes use them; stale if they predate a payTo rotation (overwatch-dominion's question).
         const live = new Set((parsed.pr.accepts ?? []).map((a: any) => String(a.payTo ?? "").toLowerCase()));
-        const wkAddrs = [...new Set(txt.match(/0x[0-9a-f]{40}(?![0-9a-f])/g) ?? [])];
         const assets = new Set([...KNOWN_ASSETS.keys(), ...(parsed.pr.accepts ?? []).map((a: any) => String(a.asset ?? "").toLowerCase())]);
         const extra = wkAddrs.filter((x) => !live.has(x) && !assets.has(x));
         if (!missing.length && extra.length) f.push(F("X010", "info", `/.well-known/x402 also lists ${extra.length} address(es) this route's challenge does not use (${extra.map((m) => m.slice(0, 10) + "…").join(", ")}). Fine if other routes pay to them; stale if they predate a payTo rotation.`, "Remove retired payTo addresses from the well-known file, or say which route each belongs to.", "/.well-known/x402"));
@@ -286,4 +289,22 @@ export async function lintEndpoint(rawUrl: string, o: { method?: "auto" | "GET" 
       openapiText: has(oapi) && !oapi.r!.truncated ? dec.decode(oapi.r!.body) : null, wellKnownText: wk.r?.status === 200 ? dec.decode(wk.r.body) : null });
   }
   return { url: u.href, verdict: verdictOf(f), summary, probes, ...(directories ? { directories } : {}), counts: { error: f.filter((x) => x.severity === "error").length, warn: f.filter((x) => x.severity === "warn").length, info: f.filter((x) => x.severity === "info").length }, findings: f, not_tested: NOT_TESTED, scope: SCOPE, verdict_meaning: VERDICT_MEANING, paid_path_checks: PAID_PATH_CHECKS };
+}
+
+/** Standalone EVM addresses in a /.well-known/x402 file (lowercased). JSON: string values that are exactly an address.
+ *  Not JSON: 40-hex runs not adjacent to other hex or URL-query characters. */
+export function wellKnownAddresses(txt: string): string[] {
+  const out = new Set<string>();
+  const isAddr = (v: string) => /^0x[0-9a-f]{40}$/i.test(v.trim());
+  try {
+    const walk = (o: any): void => {
+      if (typeof o === "string") { if (isAddr(o)) out.add(o.trim().toLowerCase()); }
+      else if (Array.isArray(o)) o.forEach(walk);
+      else if (o && typeof o === "object") Object.values(o).forEach(walk);
+    };
+    walk(JSON.parse(txt));
+  } catch {
+    for (const m of txt.matchAll(/(?<![0-9a-z=&/?#.])0x[0-9a-f]{40}(?![0-9a-z])/gi)) out.add(m[0].toLowerCase());
+  }
+  return [...out];
 }
