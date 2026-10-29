@@ -12,7 +12,7 @@ import { payerSummary, BASE_USDC, BASE_CAIP2 } from "./payers";
 import VERSIONS from "./vendor/VERSIONS.json";
 import { canonicalize, sha256Hex } from "./canon";
 
-export const SERVICE = { name: "ColdRead", version: "0.1.4", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
+export const SERVICE = { name: "ColdRead", version: "0.1.5", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
 export const REPORT_VERSION = "coldread/1";
 export const SUBREQUEST_BUDGET = 45; // Workers Free: 50 per invocation, keep a margin for storage
 
@@ -28,6 +28,24 @@ export function termsList(accepts: any[]) {
     .map((t) => [canonicalize(t), t] as const).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map((x) => x[1]);
 }
 export async function termsFingerprint(accepts: any[]) { return sha256Hex(canonicalize(termsList(accepts))); }
+/** 0.1.5 (parley): sellers that mint a unique amount per invoice (a few dust units below list price, so a transfer can be
+ *  matched to its invoice) change `amount` on every unpaid read. The payee fingerprint leaves amount out, and the report
+ *  keeps the terms themselves so verify.mjs --live can tell "amount moved within amount_tolerance_bps" from a real change. */
+export const PAYEE_FINGERPRINT_ALGO = "sha256(JCS(sort_by_JCS([{scheme,network,asset:lower,pay_to:lower}])))";
+export const AMOUNT_TOLERANCE_BPS = 100;
+export async function payeeFingerprint(accepts: any[]) {
+  const l = termsList(accepts).map(({ amount, ...rest }) => rest).map((t) => [canonicalize(t), t] as const).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map((x) => x[1]);
+  return sha256Hex(canonicalize(l));
+}
+
+export function discoveryStatus(lint: any): "read" | "absent" | "unreadable" | "unknown" {
+  if (!lint || lint.error) return "unknown";
+  const st = lint?.probes?.well_known_x402;
+  if (st === 200) return "read";
+  if (st === 404 || st === 410) return "absent";
+  if (st === undefined) return "unknown"; // the lint never got as far as the discovery probe
+  return "unreadable"; // other status, or the fetch failed (null)
+}
 
 export interface CheckInput { url: string; method?: "auto" | "GET" | "POST"; pay_to?: string; agent?: { chain_id: number; agent_id: string } }
 type Sev = "red" | "amber" | "info" | "good";
@@ -238,14 +256,19 @@ export async function runCheck(input: CheckInput, o: { fetchImpl: typeof fetch; 
   const freshness = {
     checked_at,
     terms_fingerprint: reachable ? { algo: FINGERPRINT_ALGO, hex: await termsFingerprint(accepts), entries: accepts.length } : null,
+    payee_fingerprint: reachable ? { algo: PAYEE_FINGERPRINT_ALGO, hex: await payeeFingerprint(accepts) } : null,
+    terms: reachable ? termsList(accepts).slice(0, 20) : null,
+    amount_tolerance_bps: AMOUNT_TOLERANCE_BPS,
     challenge_pay_tos: livePayTos,
     offer_signers: signers,
     // 0.1.4 (cinnabar): payTo addresses the host's /.well-known/x402 listed at check time. Only addresses are recorded,
     // not the file bytes, so a prose or formatting change never makes a report stale.
-    discovery_pay_tos: lint?.error ? null : (Array.isArray(lint?.probes?.well_known_pay_tos) ? lint.probes.well_known_pay_tos : []),
+    // 0.1.5 (cinnabar): an unreadable file is "unreadable" (null addresses), not an empty list; only a 404/410 is "absent".
+    discovery_status: discoveryStatus(lint),
+    discovery_pay_tos: discoveryStatus(lint) === "read" ? (Array.isArray(lint?.probes?.well_known_pay_tos) ? lint.probes.well_known_pay_tos : []) : discoveryStatus(lint) === "absent" ? [] : null,
     suggested_max_age_hours: SUGGESTED_MAX_AGE_HOURS,
     stale_if: [
-      "the live challenge's terms fingerprint differs (payTo, price, asset, network or scheme changed): re-run the check before paying",
+      "the live challenge's payee fingerprint differs (payTo, asset, network or scheme changed), or an amount moved by more than amount_tolerance_bps: re-run the check before paying",
       "a signed offer is now signed by a key not in offer_signers, or a listed key was revoked",
       "the host's /.well-known/x402 now lists payTo addresses and none of them is a payTo in the live challenge (discovery and challenge conflict)",
       `checked_at is older than suggested_max_age_hours (${SUGGESTED_MAX_AGE_HOURS} h); payer history and identity bindings drift`,

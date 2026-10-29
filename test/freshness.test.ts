@@ -56,3 +56,44 @@ describe("freshness: discovery (/.well-known/x402) addresses", () => {
     expect(compareDiscovery({}, [P], [P])).toMatchObject({ comparable: true, changed: null, stale: false });
   });
 });
+
+// 0.1.5: per-invoice amounts (parley), unreadable discovery = unknown (cinnabar), fail-closed state (overwatch-dominion).
+// @ts-ignore plain JS verifier
+import { amountDrift, liveState } from "../verify.mjs";
+import { payeeFingerprint, discoveryStatus } from "../src/check";
+describe("freshness 0.1.5", () => {
+  const P = A.pay_to.toLowerCase();
+  it("per-invoice dust amounts are not drift; a real price change or new payee still is", async () => {
+    const base = { ...A, amount: "996138" };
+    const report = { checked_at: "2026-10-29T12:00:00Z", freshness: { terms_fingerprint: { hex: await tsFp([base]) }, terms: termsList([base]), amount_tolerance_bps: 100, suggested_max_age_hours: 24 } };
+    const now = new Date("2026-10-29T13:00:00Z");
+    const jitter = compareFreshness(report, [wire({ ...A, amount: "996076" })], now);
+    expect(jitter).toMatchObject({ terms_match: false, stale: false, amount_drift: { payee_match: true, within_tolerance: true } });
+    expect(jitter.amount_drift.max_amount_drift_bps).toBeCloseTo(0.62, 1);
+    expect(compareFreshness(report, [wire({ ...A, amount: "1100000" })], now)).toMatchObject({ stale: true, amount_drift: { payee_match: true, within_tolerance: false } });
+    expect(compareFreshness(report, [wire({ ...A, amount: "996076", pay_to: "0x" + "5".repeat(40) })], now)).toMatchObject({ stale: true, amount_drift: { payee_match: false } });
+    // reports from before 0.1.5 have no terms list: any amount change stays stale
+    const old = { ...report, freshness: { ...report.freshness, terms: undefined } };
+    expect(compareFreshness(old, [wire({ ...A, amount: "996076" })], now).stale).toBe(true);
+    expect(amountDrift(termsList([{ ...A, amount: "10" }, B]), termsList([{ ...A, amount: "10" }, B]))).toMatchObject({ payee_match: true, max_amount_drift_bps: 0 });
+    expect(await payeeFingerprint([base])).toBe(await payeeFingerprint([{ ...A, amount: "1" }]));
+  });
+  it("an unreadable or vanished discovery file is unknown, not fresh", () => {
+    const rep = { freshness: { discovery_pay_tos: [P] } };
+    expect(compareDiscovery(rep, null, [P], "unreadable", "HTTP 503")).toMatchObject({ comparable: false, unknown: true, stale: false });
+    expect(compareDiscovery(rep, null, [P], "absent")).toMatchObject({ unknown: true });
+    expect(compareDiscovery({ freshness: { discovery_pay_tos: [] } }, null, [P], "absent").unknown).toBeUndefined();
+    expect(discoveryStatus({ probes: { well_known_x402: 200 } })).toBe("read");
+    expect(discoveryStatus({ probes: { well_known_x402: 404 } })).toBe("absent");
+    expect(discoveryStatus({ probes: { well_known_x402: 503 } })).toBe("unreadable");
+    expect(discoveryStatus({ probes: { well_known_x402: null } })).toBe("unreadable");
+    expect(discoveryStatus({ probes: {} })).toBe("unknown");
+    expect(discoveryStatus({ error: "x" })).toBe("unknown");
+  });
+  it("state: stale beats unknown; anything unconfirmed is unknown", () => {
+    expect(liveState({ freshness: { comparable: true, stale: false }, discovery: { comparable: true, stale: false } })).toBe("fresh");
+    expect(liveState({ freshness: { comparable: true, stale: true }, discovery: { unknown: true } })).toBe("stale");
+    expect(liveState({ freshness: { comparable: true, stale: false }, discovery: { unknown: true } })).toBe("unknown");
+    expect(liveState({ freshness: { comparable: false } })).toBe("unknown");
+  });
+});

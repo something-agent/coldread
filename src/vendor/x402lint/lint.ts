@@ -270,7 +270,13 @@ export async function lintEndpoint(rawUrl: string, o: { method?: "auto" | "GET" 
         // ColdRead can record them and later detect drift between discovery and the live challenge (cinnabar, 2026-10-29).
         probes.well_known_pay_tos = wkAddrs.filter((x) => !assets.has(x)).slice(0, 20);
         probes.well_known_payto = missing.length ? (wkAddrs.length ? "mismatch" : "no_address") : "match";
-      } else f.push(F("X010", "info", "No /.well-known/x402 (optional): a second place for agents to cross-check your payTo.", undefined, "/.well-known/x402"));
+      } else {
+        // 0.2.5 (cinnabar): record why the file was not read, so callers can tell "absent" (404/410) from "unreadable"
+        // (other status, or the fetch failed: null). An unreadable file is unknown, not evidence of consistency.
+        probes.well_known_x402 = wk.r?.status ?? null;
+        const absent = wk.r?.status === 404 || wk.r?.status === 410;
+        f.push(F("X010", "info", absent ? "No /.well-known/x402 (optional): a second place for agents to cross-check your payTo." : `/.well-known/x402 could not be read (${wk.r ? "HTTP " + wk.r.status : "fetch failed"}), so it was not cross-checked against the live challenge.`, undefined, "/.well-known/x402"));
+      }
     }
   }
   const has = (x: typeof llms) => !!x.r && x.r.status === 200 && x.r.body.length > 20;

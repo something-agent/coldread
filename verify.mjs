@@ -58,14 +58,39 @@ export function acceptsFrom(headers, bodyText) {
   try { return JSON.parse(bodyText).accepts ?? []; } catch { return []; }
 }
 
+// 0.1.5 (parley): per-invoice amounts. Match entries on {scheme, network, asset, pay_to}; if the payees are the same
+// and every amount is within amount_tolerance_bps of the checked one, the terms did not move in any way a buyer cares
+// about (a seller minting unique dust-offset amounts per invoice). Needs the report's freshness.terms (0.1.5+).
+const payeeKey = (t) => [t.scheme, t.network, t.asset, t.pay_to].join("|");
+export function amountDrift(reportTerms, liveTerms, tolBps = 100) {
+  if (!Array.isArray(reportTerms)) return null;
+  const a = [...reportTerms].map((t) => ({ k: payeeKey(t), v: t.amount })).sort((x, y) => (x.k < y.k ? -1 : x.k > y.k ? 1 : 0));
+  const b = [...liveTerms].map((t) => ({ k: payeeKey(t), v: t.amount })).sort((x, y) => (x.k < y.k ? -1 : x.k > y.k ? 1 : 0));
+  if (a.length !== b.length || a.some((x, i) => x.k !== b[i].k)) return { payee_match: false };
+  let max = 0;
+  for (let i = 0; i < a.length; i++) {
+    let ra, rb; try { ra = BigInt(a[i].v); rb = BigInt(b[i].v); } catch { if (a[i].v !== b[i].v) return { payee_match: true, within_tolerance: false, max_amount_drift_bps: null }; continue; }
+    if (ra === rb) continue;
+    if (ra === 0n) return { payee_match: true, within_tolerance: false, max_amount_drift_bps: null };
+    const d = ra > rb ? ra - rb : rb - ra;
+    const bps = Number((d * 1000000n) / ra) / 100; // basis points, 2 decimals
+    if (bps > max) max = bps;
+  }
+  return { payee_match: true, within_tolerance: max <= tolBps, max_amount_drift_bps: max, tolerance_bps: tolBps };
+}
+
 export function compareFreshness(report, liveAccepts, now = new Date()) {
   const f = report?.freshness;
   const age_hours = Math.round(((now.getTime() - Date.parse(report?.checked_at)) / 3.6e6) * 10) / 10;
   if (!f?.terms_fingerprint?.hex) return { comparable: false, age_hours, note: "report has no terms fingerprint (made before ColdRead 0.1.2, or the endpoint was unreachable)" };
   const live = termsFingerprint(liveAccepts);
   const same = live === f.terms_fingerprint.hex;
+  const drift = same ? null : amountDrift(f.terms, termsList(liveAccepts), f.amount_tolerance_bps ?? 100);
+  const amountOnly = !!(drift?.payee_match && drift.within_tolerance);
   const too_old = age_hours > (f.suggested_max_age_hours ?? 24);
-  return { comparable: true, terms_match: same, report_fingerprint: f.terms_fingerprint.hex, live_fingerprint: live, live_pay_tos: [...new Set(termsList(liveAccepts).map((t) => t.pay_to))], age_hours, stale: !same || too_old, why: !same ? "live payment terms differ from the checked ones: re-run the check before paying" : too_old ? "terms unchanged, but the report is older than suggested_max_age_hours" : "terms unchanged and within the suggested age" };
+  const moved = !same && !amountOnly;
+  return { comparable: true, terms_match: same, ...(drift ? { amount_drift: drift } : {}), report_fingerprint: f.terms_fingerprint.hex, live_fingerprint: live, live_pay_tos: [...new Set(termsList(liveAccepts).map((t) => t.pay_to))], age_hours, stale: moved || too_old,
+    why: moved ? (drift?.payee_match ? "an amount moved by more than the tolerance: re-run the check before paying" : "live payment terms differ from the checked ones: re-run the check before paying") : too_old ? "terms unchanged, but the report is older than suggested_max_age_hours" : amountOnly ? `same payees; amounts differ by at most ${drift.max_amount_drift_bps} bps (within ${drift.tolerance_bps}): per-invoice amounts, not a terms change` : "terms unchanged and within the suggested age" };
 }
 
 // Standalone EVM addresses in a /.well-known/x402 file: JSON string values that are exactly an address, or for
@@ -83,9 +108,15 @@ export function discoveryAddresses(text) {
 
 // 0.1.4 (cinnabar): compare the host's live /.well-known/x402 addresses with the live challenge and the report.
 // Stale only on a conflict (the file lists addresses and none is a live payTo); a changed list alone is reported, not stale.
-export function compareDiscovery(report, liveDiscovery, livePayTos) {
+// 0.1.5 (cinnabar): an unreadable discovery file is unknown, not fresh. liveStatus: "read" | "absent" (404/410) |
+// "unreadable" (other status or fetch failure). A file that held addresses at check time and is now absent is unknown too.
+export function compareDiscovery(report, liveDiscovery, livePayTos, liveStatus = liveDiscovery == null ? "absent" : "read", detail = "") {
   const rec = report?.freshness?.discovery_pay_tos;
-  if (liveDiscovery == null) return { comparable: false, note: "no /.well-known/x402 on the host now" + (rec?.length ? " (the report recorded " + rec.length + " address(es))" : "") };
+  if (liveStatus === "unreadable") return { comparable: false, unknown: true, stale: false, why: "/.well-known/x402 could not be read now" + (detail ? " (" + detail + ")" : "") + ": discovery consistency is unknown, not fresh" };
+  if (liveDiscovery == null) {
+    if (rec?.length) return { comparable: false, unknown: true, stale: false, why: "the report recorded " + rec.length + " address(es) in /.well-known/x402 but the file is gone now: unknown, not fresh" };
+    return { comparable: false, note: "no /.well-known/x402 on the host now, and none recorded" };
+  }
   const live = new Set(liveDiscovery); const pays = (livePayTos ?? []).map((x) => String(x).toLowerCase());
   const conflict = live.size > 0 && pays.length > 0 && !pays.some((p) => live.has(p));
   const changed = Array.isArray(rec) ? (rec.length !== live.size || rec.some((x) => !live.has(x))) : null;
@@ -93,11 +124,18 @@ export function compareDiscovery(report, liveDiscovery, livePayTos) {
     why: conflict ? "the well-known file lists payTo addresses but none matches the live challenge: re-run the check before paying" : changed ? "discovery addresses changed since the report, but the live payTo is still listed (or none listed): informational" : "discovery consistent with the live challenge" };
 }
 
+/** fresh | stale | unknown, from the --live comparisons. Stale wins over unknown; anything not confirmed is unknown. */
+export function liveState(r) {
+  if (r.freshness?.stale || r.discovery?.stale) return "stale";
+  if (!r.freshness?.comparable || r.discovery?.unknown) return "unknown";
+  return "fresh";
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const src = args.find((a) => !a.startsWith("--"));
   const flag = args.includes("--online") ? "--online" : undefined;
-  if (!src) { console.error("usage: node verify.mjs <report.json | report URL> [--online]"); process.exit(2); }
+  if (!src) { console.error("usage: node verify.mjs <report.json | report URL> [--online] [--live [--warn-only]]"); process.exit(2); }
   const ua = { headers: { "user-agent": "coldread-verify/1" } };
   let env;
   try { env = /^https?:\/\//.test(src) ? await (await fetch(src, ua)).json() : JSON.parse(readFileSync(src, "utf8")); }
@@ -119,13 +157,19 @@ async function main() {
       r.freshness = res.status === 402 ? compareFreshness(env.report, acceptsFrom(res.headers, text)) : { comparable: false, note: `live endpoint returned HTTP ${res.status}, not 402` };
       try {
         const wk = await fetch(new URL("/.well-known/x402", env.report.subject.url), { headers: { "user-agent": "coldread-verify/1" } });
-        const live = wk.status === 200 ? discoveryAddresses(await wk.text()) : null;
-        r.discovery = compareDiscovery(env.report, live, r.freshness.live_pay_tos ?? []);
+        const st = wk.status === 200 ? "read" : wk.status === 404 || wk.status === 410 ? "absent" : "unreadable";
+        const live = st === "read" ? discoveryAddresses(await wk.text()) : null;
+        r.discovery = compareDiscovery(env.report, live, r.freshness.live_pay_tos ?? [], st, "HTTP " + wk.status);
         if (r.discovery.stale && r.freshness.comparable) { r.freshness.stale = true; r.freshness.why = r.discovery.why; }
-      } catch (e) { r.discovery = { comparable: false, note: "well-known fetch failed: " + e.message }; }
+      } catch (e) { r.discovery = compareDiscovery(env.report, null, [], "unreadable", "fetch failed: " + e.message); }
     } catch (e) { r.freshness = { comparable: false, note: "live fetch failed: " + e.message }; }
+    r.state = liveState(r);
   }
   console.log(JSON.stringify(r, null, 2));
-  process.exit(r.valid ? 0 : 1);
+  // Exit codes: 0 valid (and, with --live, fresh); 1 invalid signature/digest/key; 2 unreadable input;
+  // with --live (fail closed, 0.1.5, asked by overwatch-dominion): 3 stale, 4 freshness unknown. --warn-only keeps 0.
+  if (!r.valid) process.exit(1);
+  if (r.state && !args.includes("--warn-only")) process.exit(r.state === "stale" ? 3 : r.state === "unknown" ? 4 : 0);
+  process.exit(0);
 }
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("verify.mjs")) main();

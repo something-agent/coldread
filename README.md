@@ -6,7 +6,7 @@ One call to `coldread_check` (HTTP or MCP) runs four read-only checks and return
 
 | Part | Library | What it reads |
 |---|---|---|
-| `endpoint` | [x402lint](https://github.com/something-agent/x402lint) 0.2.1 | the unpaid 402 challenge, `/.well-known/x402`, OpenAPI, llms.txt |
+| `endpoint` | [x402lint](https://github.com/something-agent/x402lint) 0.2.5 | the unpaid 402 challenge, `/.well-known/x402`, OpenAPI, llms.txt |
 | `signed_offers` | [ProofCheck](https://github.com/something-agent/proofcheck) 0.1.4 | x402 offer-receipt signatures (JWS / EIP-712) and whether the signer is tied to the host or payTo |
 | `erc8004` | ProofCheck chain reader | the ERC-8004 Identity Registry (`0x8004A169…a432`): host listing, registration file, agent wallet vs live payTo |
 | `payers` | ColdRead | Base USDC transfers into the live payTo over ~28 h (50,000 blocks), labelled self / known sweeper / broad payer / narrow / unclassified |
@@ -35,6 +35,10 @@ Other routes: `GET /v1/report/<digest>`, `POST /v1/verify`, `GET /v1/digests?dat
 - `overall`: `no_red_flags`, `attention`, `red_flags` or `unreachable`, with `overall_meaning`. `no_red_flags` is not an endorsement: see `cannot_check`.
 - `signals[]`: stable IDs (`E0xx` endpoint, `S0xx` signed offers, `I0xx` identity, `P0xx` payers), severity `good|info|amber|red`, one plain sentence each.
 - `parts`: the raw evidence each signal came from.
+- 0.1.5 freshness changes:
+  - `freshness.terms`, `payee_fingerprint` and `amount_tolerance_bps` (100). Some sellers mint a unique amount per invoice, a few dust units below the list price, so a transfer can be matched to its invoice. `verify.mjs --live` matches entries on scheme, network, asset and payTo. If the payees are unchanged and every amount is within the tolerance, the report is not stale (`amount_drift` shows the bps). A new payee, asset or network, or a larger price move, is still stale. Credit: parley.
+  - `freshness.discovery_status`: `read`, `absent` (404/410), `unreadable` (another status or a failed fetch) or `unknown`. An unreadable discovery file, or one that listed addresses at check time and is gone now, makes the live state `unknown`, never fresh. Credit: cinnabar.
+  - `verify.mjs --live` fails closed. It prints `state` (`fresh`, `stale` or `unknown`) and exits 0 only when the report is valid and fresh: 3 = stale, 4 = unknown. `--warn-only` keeps exit 0. Credit: overwatch-dominion.
 - `freshness.discovery_pay_tos` (0.1.4+): the payTo addresses the host's `/.well-known/x402` listed at check time (addresses only, never the file bytes). `verify.mjs --live` re-reads the file and marks the report stale only on a conflict: the file lists addresses and none of them is a live payTo. A changed list that still holds the live payTo is reported as `changed`, not stale. Credit: cinnabar.
 - `parts.payers.repeats` (0.1.3+): repeat payers split into `burst_only` (all transfers within ~1 h) and `returned_after_1h`, so a retry or one session is not read as a returning buyer.
 - `freshness` (0.1.2+): `checked_at`, a `terms_fingerprint` (sha256 over the JCS of the sorted payment terms: scheme, network, asset, payTo, amount), the payTos and offer-signing keys seen, `suggested_max_age_hours` (24) and `stale_if`. A signed report is a statement about one moment; this tells a buyer when it no longer applies. `node verify.mjs report.json --live` re-fetches the unpaid 402 (never pays), recomputes the fingerprint and says whether the terms still match and how old the report is.
