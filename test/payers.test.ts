@@ -34,12 +34,24 @@ describe("payer summary", () => {
     expect(by).toEqual({ [BUYER]: "repeat_or_narrow", [BROAD]: "broad_payer", [PAYTO]: "self", [SWEEPER]: "known_sweeper" });
     expect(s.by_label.repeat_or_narrow.transfers).toBe(3);
     expect(s.top_payer_share).toBeCloseTo(3 / 7, 3);
+    // BUYER: 3 transfers within 3 blocks = burst; BROAD: 2 within 1 block = burst; self excluded
+    expect(s.repeats).toMatchObject({ payers: 3, with_2plus_transfers: 2, burst_only: 2, returned_after_1h: 0 });
     expect(s.limits.join(" ")).toMatch(/recent window only/);
     // 3 RPC calls only: block number, one inbound batch, one classification batch
     expect(calls.length).toBe(3);
     const batch = JSON.parse(calls[1].body!);
     expect(batch.length).toBe(5);
     expect(JSON.parse(calls[2].body!).length).toBe(2 * (LOOKBACK_BLOCKS / 10_000)); // two payers to classify
+  });
+  it("splits repeat payers into bursts and payers that came back more than ~1 h later", async () => {
+    const t = [
+      { from: BUYER, to: PAYTO, usdc: 0.01, block: HEAD - 30_000 }, { from: BUYER, to: PAYTO, usdc: 0.01, block: HEAD - 100 }, // came back ~16 h later
+      { from: addr(5), to: PAYTO, usdc: 0.01, block: HEAD - 2000 }, { from: addr(5), to: PAYTO, usdc: 0.01, block: HEAD - 1000 }, // 1000 blocks apart = burst
+      { from: addr(6), to: PAYTO, usdc: 0.01, block: HEAD - 7 },
+    ];
+    const { f } = stubFetch([fakeRpc({ head: HEAD, transfers: t })]);
+    const s: any = await payerSummary([PAYTO], f);
+    expect(s.repeats).toMatchObject({ payers: 3, with_2plus_transfers: 2, burst_only: 1, returned_after_1h: 1 });
   });
   it("not_applicable without a Base USDC payTo, and makes no calls", async () => {
     const { f, calls } = stubFetch([]);

@@ -35,6 +35,7 @@ Other routes: `GET /v1/report/<digest>`, `POST /v1/verify`, `GET /v1/digests?dat
 - `overall`: `no_red_flags`, `attention`, `red_flags` or `unreachable`, with `overall_meaning`. `no_red_flags` is not an endorsement: see `cannot_check`.
 - `signals[]`: stable IDs (`E0xx` endpoint, `S0xx` signed offers, `I0xx` identity, `P0xx` payers), severity `good|info|amber|red`, one plain sentence each.
 - `parts`: the raw evidence each signal came from.
+- `parts.payers.repeats` (0.1.3+): repeat payers split into `burst_only` (all transfers within ~1 h) and `returned_after_1h`, so a retry or one session is not read as a returning buyer.
 - `freshness` (0.1.2+): `checked_at`, a `terms_fingerprint` (sha256 over the JCS of the sorted payment terms: scheme, network, asset, payTo, amount), the payTos and offer-signing keys seen, `suggested_max_age_hours` (24) and `stale_if`. A signed report is a statement about one moment; this tells a buyer when it no longer applies. `node verify.mjs report.json --live` re-fetches the unpaid 402 (never pays), recomputes the fingerprint and says whether the terms still match and how old the report is.
 - `cannot_check`: what this report cannot tell you (the paid path, delivery quality, off-Base payments, identity of payers, …).
 - `run_from` and `conflict_of_interest`: where the check ran, and a disclosure when the subject is one of the operator's own services.
