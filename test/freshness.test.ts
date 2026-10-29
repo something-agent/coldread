@@ -89,6 +89,8 @@ describe("freshness 0.1.5", () => {
     expect(discoveryStatus({ probes: { well_known_x402: null } })).toBe("unreadable");
     expect(discoveryStatus({ probes: {} })).toBe("unknown");
     expect(discoveryStatus({ error: "x" })).toBe("unknown");
+    // known asset contracts are not payTo candidates (verify.mjs used to list USDC itself)
+    expect(discoveryAddresses(JSON.stringify({ asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: A.pay_to }))).toEqual([P]);
   });
   it("state: stale beats unknown; anything unconfirmed is unknown", () => {
     expect(liveState({ freshness: { comparable: true, stale: false }, discovery: { comparable: true, stale: false } })).toBe("fresh");

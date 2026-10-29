@@ -95,7 +95,14 @@ export function compareFreshness(report, liveAccepts, now = new Date()) {
 
 // Standalone EVM addresses in a /.well-known/x402 file: JSON string values that are exactly an address, or for
 // non-JSON text a 40-hex run not adjacent to hex or URL-query characters (same rule as x402lint 0.2.3+).
-export function discoveryAddresses(text) {
+// Known stablecoin contracts (same list as x402lint known.ts) are assets, not payTo candidates (0.1.5 fix: verify.mjs
+// listed USDC itself as a discovery address, so a report recorded by the Worker, which drops assets, looked "changed").
+export const KNOWN_ASSET_ADDRESSES = new Set("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913,0x036cbd53842c5426634e7929541ec2318f3dcf7e,0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48,0x3c499c542cef5e3811e1192ce70d8cc03d5c3359,0xaf88d065e77c8cc2239327c5edb3a432268e5831,0x0b2c639c533813f4aa9d7837caf62653d097ff85".split(","));
+export function discoveryAddresses(text, assets = []) {
+  const skip = new Set([...KNOWN_ASSET_ADDRESSES, ...assets.map((a) => String(a).toLowerCase())]);
+  return discoveryAddressesRaw(text).filter((x) => !skip.has(x));
+}
+function discoveryAddressesRaw(text) {
   const out = new Set();
   try {
     const walk = (v) => { if (typeof v === "string") { if (/^0x[0-9a-fA-F]{40}$/.test(v.trim())) out.add(v.trim().toLowerCase()); } else if (v && typeof v === "object") Object.values(v).forEach(walk); };
@@ -154,11 +161,12 @@ async function main() {
       const m = env.report.subject.method === "POST" ? "POST" : "GET";
       const res = await fetch(env.report.subject.url, { method: m, headers: { "user-agent": "coldread-verify/1", ...(m === "POST" ? { "content-type": "application/json" } : {}) }, ...(m === "POST" ? { body: "{}" } : {}) });
       const text = await res.text();
-      r.freshness = res.status === 402 ? compareFreshness(env.report, acceptsFrom(res.headers, text)) : { comparable: false, note: `live endpoint returned HTTP ${res.status}, not 402` };
+      const liveAccepts = res.status === 402 ? acceptsFrom(res.headers, text) : [];
+      r.freshness = res.status === 402 ? compareFreshness(env.report, liveAccepts) : { comparable: false, note: `live endpoint returned HTTP ${res.status}, not 402` };
       try {
         const wk = await fetch(new URL("/.well-known/x402", env.report.subject.url), { headers: { "user-agent": "coldread-verify/1" } });
         const st = wk.status === 200 ? "read" : wk.status === 404 || wk.status === 410 ? "absent" : "unreadable";
-        const live = st === "read" ? discoveryAddresses(await wk.text()) : null;
+        const live = st === "read" ? discoveryAddresses(await wk.text(), termsList(liveAccepts).map((t) => t.asset)) : null;
         r.discovery = compareDiscovery(env.report, live, r.freshness.live_pay_tos ?? [], st, "HTTP " + wk.status);
         if (r.discovery.stale && r.freshness.comparable) { r.freshness.stale = true; r.freshness.why = r.discovery.why; }
       } catch (e) { r.discovery = compareDiscovery(env.report, null, [], "unreadable", "fetch failed: " + e.message); }
