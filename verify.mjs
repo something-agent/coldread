@@ -3,6 +3,8 @@
 //   node verify.mjs report.json            verify a saved envelope
 //   node verify.mjs https://.../v1/report/<digest>
 //   node verify.mjs report.json --online   also compare against the live /.well-known/coldread-keys.json
+//   node verify.mjs report.json --live     also re-fetch the subject's unpaid 402 and compare its payment-terms
+//                                          fingerprint with report.freshness (stale or not; never pays)
 // Checks: (1) sha256 over the JCS (RFC 8785) bytes of envelope.report equals envelope.digest.hex,
 //         (2) the Ed25519 signature over "coldread-report-v1:" + digest verifies,
 //         (3) the signing key is one of ColdRead's published keys (pinned below) and not revoked at checked_at.
@@ -42,8 +44,34 @@ export function verifyReport(env, keys = PINNED) {
   return { valid: digest_ok && signature_ok && key_ok, digest: hex, digest_ok, signature_ok, key_ok, key_id: s.key_id, checked_at: env.report.checked_at, subject: env.report.subject?.url, overall: env.report.overall, problems };
 }
 
+const lc = (x) => String(x ?? "").toLowerCase();
+export function termsList(accepts) {
+  return (accepts ?? []).map((a) => ({ scheme: String(a?.scheme ?? ""), network: String(a?.network ?? ""), asset: lc(a?.asset), pay_to: lc(a?.pay_to ?? a?.payTo), amount: String(a?.amount ?? a?.maxAmountRequired ?? "") }))
+    .map((t) => [canonicalize(t), t]).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map((x) => x[1]);
+}
+export const termsFingerprint = (accepts) => createHash("sha256").update(canonicalize(termsList(accepts)), "utf8").digest("hex");
+
+/** Parse an x402 402 response (v2 PAYMENT-REQUIRED header, base64 JSON; or a JSON body) into its accepts list. */
+export function acceptsFrom(headers, bodyText) {
+  const h = headers.get?.("payment-required") ?? headers["payment-required"];
+  if (h) { try { return JSON.parse(Buffer.from(h, "base64").toString("utf8")).accepts ?? []; } catch {} }
+  try { return JSON.parse(bodyText).accepts ?? []; } catch { return []; }
+}
+
+export function compareFreshness(report, liveAccepts, now = new Date()) {
+  const f = report?.freshness;
+  const age_hours = Math.round(((now.getTime() - Date.parse(report?.checked_at)) / 3.6e6) * 10) / 10;
+  if (!f?.terms_fingerprint?.hex) return { comparable: false, age_hours, note: "report has no terms fingerprint (made before ColdRead 0.1.2, or the endpoint was unreachable)" };
+  const live = termsFingerprint(liveAccepts);
+  const same = live === f.terms_fingerprint.hex;
+  const too_old = age_hours > (f.suggested_max_age_hours ?? 24);
+  return { comparable: true, terms_match: same, report_fingerprint: f.terms_fingerprint.hex, live_fingerprint: live, live_pay_tos: [...new Set(termsList(liveAccepts).map((t) => t.pay_to))], age_hours, stale: !same || too_old, why: !same ? "live payment terms differ from the checked ones: re-run the check before paying" : too_old ? "terms unchanged, but the report is older than suggested_max_age_hours" : "terms unchanged and within the suggested age" };
+}
+
 async function main() {
-  const [src, flag] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const src = args.find((a) => !a.startsWith("--"));
+  const flag = args.includes("--online") ? "--online" : undefined;
   if (!src) { console.error("usage: node verify.mjs <report.json | report URL> [--online]"); process.exit(2); }
   const ua = { headers: { "user-agent": "coldread-verify/1" } };
   let env;
@@ -58,6 +86,14 @@ async function main() {
     } catch (e) { console.error("cannot fetch live keys: " + e.message); process.exit(2); }
   }
   const r = verifyReport(env, keys);
+  if (args.includes("--live") && env?.report?.subject?.url) {
+    try {
+      const m = env.report.subject.method === "POST" ? "POST" : "GET";
+      const res = await fetch(env.report.subject.url, { method: m, headers: { "user-agent": "coldread-verify/1", ...(m === "POST" ? { "content-type": "application/json" } : {}) }, ...(m === "POST" ? { body: "{}" } : {}) });
+      const text = await res.text();
+      r.freshness = res.status === 402 ? compareFreshness(env.report, acceptsFrom(res.headers, text)) : { comparable: false, note: `live endpoint returned HTTP ${res.status}, not 402` };
+    } catch (e) { r.freshness = { comparable: false, note: "live fetch failed: " + e.message }; }
+  }
   console.log(JSON.stringify(r, null, 2));
   process.exit(r.valid ? 0 : 1);
 }

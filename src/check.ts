@@ -10,12 +10,24 @@ import { readAgent, loadRegistration, IDENTITY_REGISTRY, CHAIN_RPCS } from "./ve
 import { wellKnownRegistration } from "./vendor/proofcheck/did";
 import { payerSummary, BASE_USDC, BASE_CAIP2 } from "./payers";
 import VERSIONS from "./vendor/VERSIONS.json";
+import { canonicalize, sha256Hex } from "./canon";
 
-export const SERVICE = { name: "ColdRead", version: "0.1.1", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
+export const SERVICE = { name: "ColdRead", version: "0.1.2", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
 export const REPORT_VERSION = "coldread/1";
 export const SUBREQUEST_BUDGET = 45; // Workers Free: 50 per invocation, keep a margin for storage
 
 export class BadRequest extends Error {}
+
+/** Freshness: a fingerprint of the payment terms the report saw, so a buyer can tell at pay time whether the live
+ *  challenge still matches the one that was checked (payTo rotation, price or asset change). Addresses lowercased,
+ *  entries sorted by their JCS bytes, then sha256 over the JCS of the list. verify.mjs --live recomputes it. */
+export const FINGERPRINT_ALGO = "sha256(JCS(sort_by_JCS([{scheme,network,asset:lower,pay_to:lower,amount:string}])))";
+export const SUGGESTED_MAX_AGE_HOURS = 24;
+export function termsList(accepts: any[]) {
+  return (accepts ?? []).map((a) => ({ scheme: String(a?.scheme ?? ""), network: String(a?.network ?? ""), asset: lc(a?.asset), pay_to: lc(a?.pay_to ?? a?.payTo), amount: String(a?.amount ?? a?.maxAmountRequired ?? "") }))
+    .map((t) => [canonicalize(t), t] as const).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map((x) => x[1]);
+}
+export async function termsFingerprint(accepts: any[]) { return sha256Hex(canonicalize(termsList(accepts))); }
 
 export interface CheckInput { url: string; method?: "auto" | "GET" | "POST"; pay_to?: string; agent?: { chain_id: number; agent_id: string } }
 type Sev = "red" | "amber" | "info" | "good";
@@ -222,6 +234,21 @@ export async function runCheck(input: CheckInput, o: { fetchImpl: typeof fetch; 
   if (e.status === "rpc_error" || e.status === "error") cannot.push(`ERC-8004 lookup unavailable: ${e.detail ?? "RPC error"}`);
   if (st.refused) cannot.push(`${st.refused} lookup(s) skipped: subrequest budget reached`);
 
+  const signers = [...new Set(((off?.results ?? []) as any[]).map((r) => lc(r.signer)).filter(Boolean))];
+  const freshness = {
+    checked_at,
+    terms_fingerprint: reachable ? { algo: FINGERPRINT_ALGO, hex: await termsFingerprint(accepts), entries: accepts.length } : null,
+    challenge_pay_tos: livePayTos,
+    offer_signers: signers,
+    suggested_max_age_hours: SUGGESTED_MAX_AGE_HOURS,
+    stale_if: [
+      "the live challenge's terms fingerprint differs (payTo, price, asset, network or scheme changed): re-run the check before paying",
+      "a signed offer is now signed by a key not in offer_signers, or a listed key was revoked",
+      `checked_at is older than suggested_max_age_hours (${SUGGESTED_MAX_AGE_HOURS} h); payer history and identity bindings drift`,
+    ],
+    how_to_compare: "node verify.mjs <report> --live  (re-fetches the subject's unpaid 402, recomputes the fingerprint and reports age; never pays)",
+  };
+
   const report = {
     report_version: REPORT_VERSION,
     report_id: crypto.randomUUID(),
@@ -238,6 +265,7 @@ export async function runCheck(input: CheckInput, o: { fetchImpl: typeof fetch; 
       erc8004: erc,
       payers,
     },
+    freshness,
     cannot_check: cannot,
     method_notes: { subrequests_used: st.used, elapsed_ms: Date.now() - t0, execution: o.parts ? (o.split ?? "split: lint, probe, erc8004 and payers each ran in a separate Worker invocation (self service binding) to stay near the Free plan CPU limit") : "single process", never_pays: true, never_signs_payments: true },
   };

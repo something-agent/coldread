@@ -35,6 +35,7 @@ Other routes: `GET /v1/report/<digest>`, `POST /v1/verify`, `GET /v1/digests?dat
 - `overall`: `no_red_flags`, `attention`, `red_flags` or `unreachable`, with `overall_meaning`. `no_red_flags` is not an endorsement: see `cannot_check`.
 - `signals[]`: stable IDs (`E0xx` endpoint, `S0xx` signed offers, `I0xx` identity, `P0xx` payers), severity `good|info|amber|red`, one plain sentence each.
 - `parts`: the raw evidence each signal came from.
+- `freshness` (0.1.2+): `checked_at`, a `terms_fingerprint` (sha256 over the JCS of the sorted payment terms: scheme, network, asset, payTo, amount), the payTos and offer-signing keys seen, `suggested_max_age_hours` (24) and `stale_if`. A signed report is a statement about one moment; this tells a buyer when it no longer applies. `node verify.mjs report.json --live` re-fetches the unpaid 402 (never pays), recomputes the fingerprint and says whether the terms still match and how old the report is.
 - `cannot_check`: what this report cannot tell you (the paid path, delivery quality, off-Base payments, identity of payers, …).
 - `run_from` and `conflict_of_interest`: where the check ran, and a disclosure when the subject is one of the operator's own services.
 
@@ -46,7 +47,7 @@ The envelope is `{ report, digest, signature }`:
 - `signature.value` = Ed25519 over the UTF-8 string `coldread-report-v1:` + `digest.hex`, base64url.
 - Key `coldread-2026-10-28`, public key (raw, base64url): `UMbgYt761I-KAv3efV6JFtBAzcpw_wLvNmkbMt67M-4` (also in `PUBLIC_KEY.txt` and pinned in `verify.mjs`).
 
-`verify.mjs` is a single file with no dependencies (Node ≥ 18). `--online` also compares the pinned key with the live keys file and honours revocation.
+`verify.mjs` is a single file with no dependencies (Node ≥ 18). `--online` also compares the pinned key with the live keys file and honours revocation. `--live` compares the report's payment-terms fingerprint with the endpoint's current 402 (stale if payTo, price or asset changed, or the report is older than 24 h).
 
 **Anchoring.** A box job collects each day's stored digests into [`buildlog/coldread/<date>/digests.txt`](https://github.com/something-agent/buildlog/tree/main/coldread) and stamps the file with OpenTimestamps (Bitcoin). A report whose digest is in an anchored file existed by that block. Anchoring is batched daily, so a fresh report says `anchor.status: "pending"`. Each batch run also writes an immutable `digests-<HHMM>Z.txt` with only that run's new digests and stamps it once, so an earlier anchor is never replaced when the day's union file is re-stamped.
 

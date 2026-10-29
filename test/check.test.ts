@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runCheck, parseInput, BadRequest, budgetFetch, partRunner, plain, Parts } from "../src/check";
+import { runCheck, parseInput, BadRequest, budgetFetch, partRunner, plain, Parts, termsFingerprint } from "../src/check";
 import { stubFetch, fakeRpc, json, fixture, fixtureText, seller, GOOD_PR, PAYTO, CAPTURED, b64 } from "./helpers";
 
 const REG = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432";
@@ -38,6 +38,8 @@ describe("runCheck", () => {
     expect(r.signals.map((s: any) => s.id)).toEqual(expect.arrayContaining(["I003", "P003"]));
     expect(["no_red_flags", "attention"]).toContain(r.overall);
     expect(r.signals.some((s: any) => s.severity === "red")).toBe(false);
+    expect(r.freshness).toMatchObject({ checked_at: r.checked_at, challenge_pay_tos: [PAYTO], suggested_max_age_hours: 24 });
+    expect(r.freshness.terms_fingerprint.hex).toBe(await termsFingerprint(r.parts.live_challenge.accepts));
     expect(r.method_notes.subrequests_used).toBe(calls.length);
     expect(r.method_notes.subrequests_used).toBeLessThanOrEqual(45);
     expect(r.cannot_check.join(" ")).toMatch(/never pays/);
@@ -78,6 +80,7 @@ describe("runCheck", () => {
     const r: any = await runCheck(parseInput({ url: "https://free.example/x" }), { fetchImpl: f });
     expect(r.overall).toBe("unreachable");
     expect(r.parts.payers.status).toBe("not_applicable");
+    expect(r.freshness.terms_fingerprint).toBeNull();
   });
   it("invalid signed offer is a red flag", async () => {
     const pr = GOOD_PR({ extensions: { bazaar: {}, "offer-receipt": { info: { offers: [{ format: "jws", signature: "eyJhbGciOiJFZERTQSJ9.eyJ4IjoxfQ.AAAA" }] } } } });

@@ -1,6 +1,6 @@
 {
   "name": "coldread",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "ColdRead: one independent, signed trust report on an x402 seller before you pay it (x402lint + ProofCheck + ERC-8004 + a labelled on-chain payer summary). HTTP API + remote MCP on Cloudflare Workers.",
   "type": "module",
   "scripts": { "dev": "wrangler dev", "test": "vitest run", "typecheck": "tsc -p .", "deploy": "wrangler deploy", "sync-vendor": "sh scripts/sync-vendor.sh" },
