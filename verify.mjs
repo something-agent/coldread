@@ -68,6 +68,31 @@ export function compareFreshness(report, liveAccepts, now = new Date()) {
   return { comparable: true, terms_match: same, report_fingerprint: f.terms_fingerprint.hex, live_fingerprint: live, live_pay_tos: [...new Set(termsList(liveAccepts).map((t) => t.pay_to))], age_hours, stale: !same || too_old, why: !same ? "live payment terms differ from the checked ones: re-run the check before paying" : too_old ? "terms unchanged, but the report is older than suggested_max_age_hours" : "terms unchanged and within the suggested age" };
 }
 
+// Standalone EVM addresses in a /.well-known/x402 file: JSON string values that are exactly an address, or for
+// non-JSON text a 40-hex run not adjacent to hex or URL-query characters (same rule as x402lint 0.2.3+).
+export function discoveryAddresses(text) {
+  const out = new Set();
+  try {
+    const walk = (v) => { if (typeof v === "string") { if (/^0x[0-9a-fA-F]{40}$/.test(v.trim())) out.add(v.trim().toLowerCase()); } else if (v && typeof v === "object") Object.values(v).forEach(walk); };
+    walk(JSON.parse(text));
+  } catch {
+    for (const m of String(text).matchAll(/(?<![0-9a-zA-Z=&?\/])0x[0-9a-fA-F]{40}(?![0-9a-zA-Z])/g)) out.add(m[0].toLowerCase());
+  }
+  return [...out];
+}
+
+// 0.1.4 (cinnabar): compare the host's live /.well-known/x402 addresses with the live challenge and the report.
+// Stale only on a conflict (the file lists addresses and none is a live payTo); a changed list alone is reported, not stale.
+export function compareDiscovery(report, liveDiscovery, livePayTos) {
+  const rec = report?.freshness?.discovery_pay_tos;
+  if (liveDiscovery == null) return { comparable: false, note: "no /.well-known/x402 on the host now" + (rec?.length ? " (the report recorded " + rec.length + " address(es))" : "") };
+  const live = new Set(liveDiscovery); const pays = (livePayTos ?? []).map((x) => String(x).toLowerCase());
+  const conflict = live.size > 0 && pays.length > 0 && !pays.some((p) => live.has(p));
+  const changed = Array.isArray(rec) ? (rec.length !== live.size || rec.some((x) => !live.has(x))) : null;
+  return { comparable: true, report_discovery_pay_tos: rec ?? null, live_discovery_pay_tos: [...live], conflict, changed, stale: conflict,
+    why: conflict ? "the well-known file lists payTo addresses but none matches the live challenge: re-run the check before paying" : changed ? "discovery addresses changed since the report, but the live payTo is still listed (or none listed): informational" : "discovery consistent with the live challenge" };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const src = args.find((a) => !a.startsWith("--"));
@@ -92,6 +117,12 @@ async function main() {
       const res = await fetch(env.report.subject.url, { method: m, headers: { "user-agent": "coldread-verify/1", ...(m === "POST" ? { "content-type": "application/json" } : {}) }, ...(m === "POST" ? { body: "{}" } : {}) });
       const text = await res.text();
       r.freshness = res.status === 402 ? compareFreshness(env.report, acceptsFrom(res.headers, text)) : { comparable: false, note: `live endpoint returned HTTP ${res.status}, not 402` };
+      try {
+        const wk = await fetch(new URL("/.well-known/x402", env.report.subject.url), { headers: { "user-agent": "coldread-verify/1" } });
+        const live = wk.status === 200 ? discoveryAddresses(await wk.text()) : null;
+        r.discovery = compareDiscovery(env.report, live, r.freshness.live_pay_tos ?? []);
+        if (r.discovery.stale && r.freshness.comparable) { r.freshness.stale = true; r.freshness.why = r.discovery.why; }
+      } catch (e) { r.discovery = { comparable: false, note: "well-known fetch failed: " + e.message }; }
     } catch (e) { r.freshness = { comparable: false, note: "live fetch failed: " + e.message }; }
   }
   console.log(JSON.stringify(r, null, 2));

@@ -266,6 +266,9 @@ export async function lintEndpoint(rawUrl: string, o: { method?: "auto" | "GET" 
         const extra = wkAddrs.filter((x) => !live.has(x) && !assets.has(x));
         if (!missing.length && extra.length) f.push(F("X010", "info", `/.well-known/x402 also lists ${extra.length} address(es) this route's challenge does not use (${extra.map((m) => m.slice(0, 10) + "…").join(", ")}). Fine if other routes pay to them; stale if they predate a payTo rotation.`, "Remove retired payTo addresses from the well-known file, or say which route each belongs to.", "/.well-known/x402"));
         probes.well_known_x402 = 200;
+        // Standalone addresses listed in the well-known file (known asset contracts removed), so callers such as
+        // ColdRead can record them and later detect drift between discovery and the live challenge (cinnabar, 2026-10-29).
+        probes.well_known_pay_tos = wkAddrs.filter((x) => !assets.has(x)).slice(0, 20);
         probes.well_known_payto = missing.length ? (wkAddrs.length ? "mismatch" : "no_address") : "match";
       } else f.push(F("X010", "info", "No /.well-known/x402 (optional): a second place for agents to cross-check your payTo.", undefined, "/.well-known/x402"));
     }

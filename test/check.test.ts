@@ -39,6 +39,7 @@ describe("runCheck", () => {
     expect(["no_red_flags", "attention"]).toContain(r.overall);
     expect(r.signals.some((s: any) => s.severity === "red")).toBe(false);
     expect(r.freshness).toMatchObject({ checked_at: r.checked_at, challenge_pay_tos: [PAYTO], suggested_max_age_hours: 24 });
+    expect(Array.isArray(r.freshness.discovery_pay_tos) || r.freshness.discovery_pay_tos === null).toBe(true);
     expect(r.freshness.terms_fingerprint.hex).toBe(await termsFingerprint(r.parts.live_challenge.accepts));
     expect(r.method_notes.subrequests_used).toBe(calls.length);
     expect(r.method_notes.subrequests_used).toBeLessThanOrEqual(45);

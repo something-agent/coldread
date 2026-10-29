@@ -12,7 +12,7 @@ import { payerSummary, BASE_USDC, BASE_CAIP2 } from "./payers";
 import VERSIONS from "./vendor/VERSIONS.json";
 import { canonicalize, sha256Hex } from "./canon";
 
-export const SERVICE = { name: "ColdRead", version: "0.1.3", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
+export const SERVICE = { name: "ColdRead", version: "0.1.4", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
 export const REPORT_VERSION = "coldread/1";
 export const SUBREQUEST_BUDGET = 45; // Workers Free: 50 per invocation, keep a margin for storage
 
@@ -240,10 +240,14 @@ export async function runCheck(input: CheckInput, o: { fetchImpl: typeof fetch; 
     terms_fingerprint: reachable ? { algo: FINGERPRINT_ALGO, hex: await termsFingerprint(accepts), entries: accepts.length } : null,
     challenge_pay_tos: livePayTos,
     offer_signers: signers,
+    // 0.1.4 (cinnabar): payTo addresses the host's /.well-known/x402 listed at check time. Only addresses are recorded,
+    // not the file bytes, so a prose or formatting change never makes a report stale.
+    discovery_pay_tos: lint?.error ? null : (Array.isArray(lint?.probes?.well_known_pay_tos) ? lint.probes.well_known_pay_tos : []),
     suggested_max_age_hours: SUGGESTED_MAX_AGE_HOURS,
     stale_if: [
       "the live challenge's terms fingerprint differs (payTo, price, asset, network or scheme changed): re-run the check before paying",
       "a signed offer is now signed by a key not in offer_signers, or a listed key was revoked",
+      "the host's /.well-known/x402 now lists payTo addresses and none of them is a payTo in the live challenge (discovery and challenge conflict)",
       `checked_at is older than suggested_max_age_hours (${SUGGESTED_MAX_AGE_HOURS} h); payer history and identity bindings drift`,
     ],
     how_to_compare: "node verify.mjs <report> --live  (re-fetches the subject's unpaid 402, recomputes the fingerprint and reports age; never pays)",

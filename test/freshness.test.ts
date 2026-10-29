@@ -36,3 +36,23 @@ describe("freshness: payment-terms fingerprint", () => {
     expect(acceptsFrom(new Headers(), JSON.stringify({ accepts: [wire(A), wire(B)] }))).toHaveLength(2);
   });
 });
+
+// 0.1.4 (cinnabar): discovery-file drift, by address only.
+// @ts-ignore plain JS verifier
+import { discoveryAddresses, compareDiscovery } from "../verify.mjs";
+describe("freshness: discovery (/.well-known/x402) addresses", () => {
+  const P = A.pay_to.toLowerCase(), Q = "0x" + "4".repeat(40);
+  it("extracts standalone addresses only (JSON values; not URL query params or signature prefixes)", () => {
+    expect(discoveryAddresses(JSON.stringify({ payTo: A.pay_to, resources: [`https://x.test/q?pool=${Q}`], ownershipProofs: ["0x" + "ab".repeat(65)] }))).toEqual([P]);
+    expect(discoveryAddresses(`payTo: ${A.pay_to}\nsee https://x.test/?a=${Q}`)).toEqual([P]);
+  });
+  it("is stale only on a conflict; a changed list that still holds the live payTo is informational", () => {
+    const rep = { freshness: { discovery_pay_tos: [P] } };
+    expect(compareDiscovery(rep, [P], [P])).toMatchObject({ comparable: true, conflict: false, changed: false, stale: false });
+    expect(compareDiscovery(rep, [P, Q], [P])).toMatchObject({ conflict: false, changed: true, stale: false });
+    expect(compareDiscovery(rep, [Q], [P])).toMatchObject({ conflict: true, stale: true });
+    expect(compareDiscovery(rep, [], [P])).toMatchObject({ conflict: false, changed: true, stale: false });
+    expect(compareDiscovery(rep, null, [P]).comparable).toBe(false);
+    expect(compareDiscovery({}, [P], [P])).toMatchObject({ comparable: true, changed: null, stale: false });
+  });
+});
