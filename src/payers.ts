@@ -20,8 +20,8 @@ const MAX_BYTES = 3_000_000;
 
 /** Addresses ColdRead has itself documented, with the evidence. Labels are hypotheses, not accusations. */
 export const KNOWN_PAYERS: Record<string, { label: string; evidence: string }> = {
-  "0xa1d1c0cf717402ff3651aa4873ccf96410b01978": { label: "known_sweeper", evidence: "paid 368 distinct payees in Base blocks 53,110,000-53,175,000 with no repeat to the same payee (ColdRead research 2026-10-27)" },
-  "0x7722dfae6bbed2fd02dc07455c2f5bf14be25e4a": { label: "known_sweeper", evidence: "paid 74 distinct payees in Base blocks 53,110,000-53,175,000 with no repeat to the same payee (ColdRead research 2026-10-27)" },
+  "0xa1d1c0cf717402ff3651aa4873ccf96410b01978": { label: "known_sweeper", evidence: "paid 368 distinct payees in Base blocks 53,110,000-53,175,000 with no repeat to the same payee (ColdRead research 2026-10-27); corroborated by overwatch-dominion's payer log, 2026-10-28 (paid them once, 0.002 USDC, never returned)" },
+  "0x7722dfae6bbed2fd02dc07455c2f5bf14be25e4a": { label: "known_sweeper", evidence: "paid 74 distinct payees in Base blocks 53,110,000-53,175,000 with no repeat to the same payee (ColdRead research 2026-10-27); corroborated by overwatch-dominion's payer log, 2026-10-28 (paid them twice, 30 blocks apart, never returned)" },
 };
 
 const pad = (a: string) => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
