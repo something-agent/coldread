@@ -13,6 +13,7 @@ const RETRY_MS = [1200, 3000];
 export const WINDOW_BLOCKS = 50_000; // ~27.8 h at 2 s blocks
 const CHUNK = 10_000;
 export const LOOKBACK_BLOCKS = 20_000; // payer-side window used to classify the top payers (~11 h)
+export const DUST_UNITS = 100n;         // 0.0001 USDC: a payer whose every transfer is below this is "dust", never a buyer (0.1.5, from treasurytraceai's address-poisoning post)
 export const BURST_BLOCKS = 1800;      // ~1 h of Base blocks: transfers closer than this count as one burst
 export const BROAD_PAYEES = 20;       // distinct payees in the lookback that make a payer "broad" (sweeper-like)
 const TOP_CLASSIFIED = 3;
@@ -71,6 +72,7 @@ export async function payerSummary(payTos: string[], fetchImpl: typeof fetch) {
       known_sweeper: "an address ColdRead has documented paying hundreds of payees once each (catalogue sweeper or crawler)",
       broad_payer: `paid ${BROAD_PAYEES}+ different payees in the lookback window: sweeper-like or an aggregator; not by itself proof of anything`,
       repeat_or_narrow: "not self, not known, paid fewer than the broad threshold of payees: consistent with a chosen buyer, but not proven independent (one operator can run many wallets)",
+      dust: "every transfer from this payer is below 0.0001 USDC (including zero-value): poisoning bait or probing, never counted as demand",
       unclassified: "outside the top payers we classify per request",
     },
   };
@@ -84,7 +86,7 @@ export async function payerSummary(payTos: string[], fetchImpl: typeof fetch) {
   for (const p of pts) for (let s = from; s <= head; s += CHUNK) calls.push({ jsonrpc: "2.0", id: id++, method: "eth_getLogs", params: [{ address: BASE_USDC, topics: [TRANSFER, null, pad(p)], fromBlock: "0x" + s.toString(16), toBlock: "0x" + Math.min(s + CHUNK - 1, head).toString(16) }] });
   const { results, rpc } = await rpcBatch(calls, fetchImpl);
   const failed = results.filter((r) => r.error).length;
-  const per = new Map<string, { n: number; v: bigint; b0: number; b1: number }>();
+  const per = new Map<string, { n: number; v: bigint; b0: number; b1: number; maxV: bigint }>();
   let n = 0, total = 0n, selfN = 0, selfV = 0n;
   for (const r of results) for (const l of (r.result ?? []) as any[]) {
     const fromA = addrOf(l.topics[1]), to = addrOf(l.topics[2]);
@@ -92,7 +94,7 @@ export async function payerSummary(payTos: string[], fetchImpl: typeof fetch) {
     n++; total += v;
     if (fromA === to || pts.includes(fromA)) { selfN++; selfV += v; }
     const bn = parseInt(l.blockNumber ?? "0x0", 16) || 0;
-    const e = per.get(fromA) ?? { n: 0, v: 0n, b0: bn, b1: bn }; e.n++; e.v += v; e.b0 = Math.min(e.b0, bn); e.b1 = Math.max(e.b1, bn); per.set(fromA, e);
+    const e = per.get(fromA) ?? { n: 0, v: 0n, b0: bn, b1: bn, maxV: 0n }; e.n++; e.v += v; e.b0 = Math.min(e.b0, bn); e.b1 = Math.max(e.b1, bn); if (v > e.maxV) e.maxV = v; per.set(fromA, e);
   }
   const usd = (v: bigint) => Number(v) / 1e6;
   // Repeat payers, split by timing: a burst (all transfers within ~1 h) can be one session or a retry; a payer that came
@@ -103,11 +105,13 @@ export async function payerSummary(payTos: string[], fetchImpl: typeof fetch) {
   const repeats = { payers: others.length, with_2plus_transfers: multi.length, burst_only: multi.length - returned, returned_after_1h: returned, definition: `with_2plus_transfers counts every non-self payer with 2+ inbound transfers in the window; burst_only = all of them within ${BURST_BLOCKS} blocks (~1 h at 2 s/block), returned_after_1h = first and last more than that apart. Only the window is seen, so a buyer returning across days is undercounted.` };
   const sorted = [...per.entries()].sort((a, b) => b[1].n - a[1].n || (b[1].v > a[1].v ? 1 : -1));
   const rows: PayerRow[] = sorted.map(([a, e]) => ({ address: a, transfers: e.n, usdc: usd(e.v), label: "unclassified", evidence: "" }));
-  // classify the top payers
-  const toCheck = rows.filter((r) => !pts.includes(r.address) && !KNOWN_PAYERS[r.address]).slice(0, TOP_CLASSIFIED);
+  const isDust = (a: string) => (per.get(a)?.maxV ?? 0n) < DUST_UNITS;
+  // classify the top payers (dust payers need no lookback query)
+  const toCheck = rows.filter((r) => !pts.includes(r.address) && !KNOWN_PAYERS[r.address] && !isDust(r.address)).slice(0, TOP_CLASSIFIED);
   for (const r of rows) {
     if (pts.includes(r.address)) { r.label = "self"; r.evidence = "payer equals the payTo"; }
     else if (KNOWN_PAYERS[r.address]) { r.label = KNOWN_PAYERS[r.address].label; r.evidence = KNOWN_PAYERS[r.address].evidence; }
+    else if (isDust(r.address)) { r.label = "dust"; r.evidence = `${r.transfers} transfer(s), each below 0.0001 USDC`; }
   }
   let classifyNote: string | undefined;
   if (toCheck.length) {
@@ -142,7 +146,7 @@ export async function payerSummary(payTos: string[], fetchImpl: typeof fetch) {
     self_payments: { transfers: selfN, usdc: usd(selfV) },
     repeats,
     top_payer_share: top && n ? +(top.transfers / n).toFixed(3) : null,
-    by_label: { self: sumBy("self"), known_sweeper: sumBy("known_sweeper"), broad_payer: sumBy("broad_payer"), repeat_or_narrow: sumBy("repeat_or_narrow"), unclassified: sumBy("unclassified") },
+    by_label: { self: sumBy("self"), known_sweeper: sumBy("known_sweeper"), broad_payer: sumBy("broad_payer"), repeat_or_narrow: sumBy("repeat_or_narrow"), dust: sumBy("dust"), unclassified: sumBy("unclassified") },
     payers: rows.slice(0, 10),
     ...(rows.length > 10 ? { payers_truncated: rows.length - 10 } : {}),
     ...(classifyNote ? { note: classifyNote } : {}),

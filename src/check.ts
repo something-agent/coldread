@@ -238,10 +238,10 @@ export async function runCheck(input: CheckInput, o: { fetchImpl: typeof fetch; 
     if (inb === 0) sig("P000", "info", "payers", `no USDC received on Base by the payTo in the last ~${p.window.approx_hours} h`);
     else {
       const lab = p.by_label;
-      const nonDemand = lab.self.transfers + lab.known_sweeper.transfers + lab.broad_payer.transfers;
-      if (lab.repeat_or_narrow.transfers === 0 && nonDemand === inb) sig("P001", "amber", "payers", `all ${inb} inbound USDC transfers in ~${p.window.approx_hours} h came from the payTo itself, documented sweepers or broad payers: no sign of chosen buyers`);
+      const nonDemand = lab.self.transfers + lab.known_sweeper.transfers + lab.broad_payer.transfers + (lab.dust?.transfers ?? 0);
+      if (lab.repeat_or_narrow.transfers === 0 && nonDemand === inb) sig("P001", "amber", "payers", `all ${inb} inbound USDC transfers in ~${p.window.approx_hours} h came from the payTo itself, documented sweepers, broad payers or dust: no sign of chosen buyers`);
       else if (lab.self.transfers / inb > 0.5) sig("P002", "amber", "payers", `${lab.self.transfers} of ${inb} inbound transfers are self-payments`);
-      else sig("P003", "info", "payers", `${inb} inbound USDC transfers from ${p.inbound.distinct_payers} payer(s) in ~${p.window.approx_hours} h; by transfers: ${lab.repeat_or_narrow.transfers} narrow/repeat (not proven independent), ${nonDemand} self/sweeper/broad, ${lab.unclassified.transfers} unclassified${p.note ? " (classification query failed; queued for the batch job)" : ""}`);
+      else sig("P003", "info", "payers", `${inb} inbound USDC transfers from ${p.inbound.distinct_payers} payer(s) in ~${p.window.approx_hours} h; by transfers: ${lab.repeat_or_narrow.transfers} narrow/repeat (not proven independent), ${nonDemand} self/sweeper/broad/dust, ${lab.unclassified.transfers} unclassified${p.note ? " (classification query failed; queued for the batch job)" : ""}`);
     }
   }
   const sevs = signals.map((s) => s.severity);

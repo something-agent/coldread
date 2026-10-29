@@ -53,6 +53,20 @@ describe("payer summary", () => {
     const s: any = await payerSummary([PAYTO], f);
     expect(s.repeats).toMatchObject({ payers: 3, with_2plus_transfers: 2, burst_only: 1, returned_after_1h: 1 });
   });
+  it("labels dust payers (every transfer below 0.0001 USDC, incl. zero-value) without a lookback query (0.1.5)", async () => {
+    const DUSTER = addr(0xd057);
+    const t = [
+      { from: DUSTER, to: PAYTO, usdc: 0, block: HEAD - 40 }, { from: DUSTER, to: PAYTO, usdc: 0.00005, block: HEAD - 30 },
+      { from: BUYER, to: PAYTO, usdc: 0.02, block: HEAD - 20 },
+    ];
+    const { f, calls } = stubFetch([fakeRpc({ head: HEAD, transfers: t })]);
+    const s: any = await payerSummary([PAYTO], f);
+    const by = Object.fromEntries(s.payers.map((p: any) => [p.address, p.label]));
+    expect(by[DUSTER]).toBe("dust");
+    expect(by[BUYER]).toBe("repeat_or_narrow");
+    expect(s.by_label.dust).toEqual({ transfers: 2, usdc: 0.00005 });
+    expect(JSON.parse(calls[2].body!).length).toBe(LOOKBACK_BLOCKS / 10_000); // only BUYER is looked up
+  });
   it("not_applicable without a Base USDC payTo, and makes no calls", async () => {
     const { f, calls } = stubFetch([]);
     expect((await payerSummary([], f) as any).status).toBe("not_applicable");
