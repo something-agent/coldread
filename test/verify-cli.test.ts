@@ -11,6 +11,11 @@ import VERSIONS from "../src/vendor/VERSIONS.json";
 const run = (file: string) => spawnSync(process.execPath, [join(__dirname, "..", "verify.mjs"), file], { encoding: "utf8" });
 
 describe("verify.mjs CLI", () => {
+  it("--help prints the exit-code table and exits 0", () => {
+    const r = run("--help");
+    expect(r.status).toBe(0);
+    for (const s of ["0 valid", "1 bad", "2 unreadable", "3 stale", "4 unknown", "--warn-only"]) expect(r.stdout).toContain(s);
+  });
   it("exit 1 for a report signed by an unpublished key, 1 for a tampered one, 2 for unreadable input", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cr-"));
     const env: any = await seal({ report_version: "coldread/1", checked_at: "2026-10-28T00:00:00Z" }, await loadReportKey(fixtureText("test-key.json")), "u");

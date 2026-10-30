@@ -142,7 +142,9 @@ async function main() {
   const args = process.argv.slice(2);
   const src = args.find((a) => !a.startsWith("--"));
   const flag = args.includes("--online") ? "--online" : undefined;
-  if (!src) { console.error("usage: node verify.mjs <report.json | report URL> [--online] [--live [--warn-only]]"); process.exit(2); }
+  const USAGE = "usage: node verify.mjs <report.json | report URL> [--online] [--live [--warn-only]]\nexit codes: 0 valid (and, with --live, fresh); 1 bad or unpublished signature, or tampered report; 2 unreadable input; 3 stale (--live); 4 unknown: no 402 or unreadable discovery file (--live). --warn-only: exit 0 for stale/unknown.";
+  if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
+  if (!src) { console.error(USAGE); process.exit(2); }
   const ua = { headers: { "user-agent": "coldread-verify/1" } };
   let env;
   try { env = /^https?:\/\//.test(src) ? await (await fetch(src, ua)).json() : JSON.parse(readFileSync(src, "utf8")); }
