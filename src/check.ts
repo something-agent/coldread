@@ -12,7 +12,7 @@ import { payerSummary, BASE_USDC, BASE_CAIP2 } from "./payers";
 import VERSIONS from "./vendor/VERSIONS.json";
 import { canonicalize, sha256Hex } from "./canon";
 
-export const SERVICE = { name: "ColdRead", version: "0.1.5", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
+export const SERVICE = { name: "ColdRead", version: "0.1.6", repo: "https://github.com/something-agent/coldread", operator: "something (an autonomous agent with an anonymous human operator)" };
 export const REPORT_VERSION = "coldread/1";
 export const SUBREQUEST_BUDGET = 45; // Workers Free: 50 per invocation, keep a margin for storage
 
@@ -143,7 +143,24 @@ export const PAYER_CACHE_MAX_AGE_H = 48;
 export type PayerCache = (key: string) => Promise<{ computed_at: string; summary: any } | null>;
 
 /** One part's output plus the subrequests it used. Parts never throw: failures come back as `error`. */
-export interface PartOut { r?: any; error?: string; used: number; refused: number }
+export interface PartOut { r?: any; error?: string; used: number; refused: number; evidence?: FetchEvidence[] }
+/** 0.1.6 (cinnabar): what exactly was read. For the subject URL and /.well-known/x402 only: when, the HTTP status and
+ *  sha256 of the response body and of the PAYMENT-REQUIRED header. Hashes only; the bytes are not stored. */
+export interface FetchEvidence { part: string; url: string; method: string; fetched_at: string; status: number; body_sha256: string | null; body_bytes: number | null; payment_required_sha256?: string }
+export function evidenceFetch(f: typeof fetch, part: string, watch: (u: string) => boolean, log: FetchEvidence[]): typeof fetch {
+  return (async (input: any, init?: any) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const res = await f(input, init);
+    if (!watch(url)) return res;
+    const ev: FetchEvidence = { part, url, method: String(init?.method ?? (typeof input === "object" && input?.method) ?? "GET").toUpperCase(), fetched_at: new Date().toISOString(), status: res.status, body_sha256: null, body_bytes: null };
+    try { const b = new Uint8Array(await res.clone().arrayBuffer()); ev.body_sha256 = await sha256Hex(b); ev.body_bytes = b.length; } catch { /* body unreadable: hash stays null */ }
+    const prh = res.headers.get("payment-required");
+    if (prh) ev.payment_required_sha256 = await sha256Hex(prh);
+    log.push(ev);
+    return res;
+  }) as typeof fetch;
+}
+const watchFor = (subject: string) => { const s = new URL(subject); const sp = s.origin + s.pathname; return (u: string) => { try { const x = new URL(u); return x.origin + x.pathname === sp || (x.origin === s.origin && x.pathname === "/.well-known/x402"); } catch { return false; } }; };
 /** The four parts of a check. Locally they run in-process; on Workers each runs in its own invocation
  *  (self service binding) so each stays near the Free plan's 10 ms CPU limit. */
 export interface Parts {
@@ -153,16 +170,17 @@ export interface Parts {
   payers(payTos: string[]): Promise<PartOut>;
 }
 export const PART_BUDGET = { lint: 14, probe: 11, erc8004: 8, payers: 9 };
-const wrap = async (fn: () => Promise<any>, st: { used: number; refused: number }, s0 = { ...st }): Promise<PartOut> => {
-  try { const r = await fn(); return { r, used: st.used - s0.used, refused: st.refused - s0.refused }; }
-  catch (e) { return { error: short(e), used: st.used - s0.used, refused: st.refused - s0.refused }; }
+const wrap = async (fn: () => Promise<any>, st: { used: number; refused: number }, s0 = { ...st }, evidence?: FetchEvidence[]): Promise<PartOut> => {
+  const ev = evidence ? { evidence } : {};
+  try { const r = await fn(); return { r, used: st.used - s0.used, refused: st.refused - s0.refused, ...ev }; }
+  catch (e) { return { error: short(e), used: st.used - s0.used, refused: st.refused - s0.refused, ...ev }; }
 };
 /** Run one part with its own subrequest budget (used inside the per-part invocation). */
 export function partRunner(inner: typeof fetch, shared?: { fetch: typeof fetch; st: { used: number; refused: number } }): Parts {
   const mk = (n: number) => shared ?? budgetFetch(inner, n);
   return {
-    lint: (url, method) => { const b = mk(PART_BUDGET.lint); return wrap(() => lintEndpoint(url, { method, directories: true }, { fetchImpl: b.fetch }), b.st); },
-    probe: (url, method, nowSec) => { const b = mk(PART_BUDGET.probe); return wrap(() => probe(url, { method }, { fetchImpl: b.fetch, cache: new Map(), now: nowSec }), b.st); },
+    lint: (url, method) => { const b = mk(PART_BUDGET.lint); const ev: FetchEvidence[] = []; return wrap(() => lintEndpoint(url, { method, directories: true }, { fetchImpl: evidenceFetch(b.fetch, "lint", watchFor(url), ev) }), b.st, undefined, ev); },
+    probe: (url, method, nowSec) => { const b = mk(PART_BUDGET.probe); const ev: FetchEvidence[] = []; return wrap(() => probe(url, { method }, { fetchImpl: evidenceFetch(b.fetch, "probe", watchFor(url), ev), cache: new Map(), now: nowSec }), b.st, undefined, ev); },
     erc8004: (host, input, payTos) => { const b = mk(PART_BUDGET.erc8004); return wrap(() => erc8004Part(host, input, payTos, b.fetch), b.st); },
     payers: (payTos) => { const b = mk(PART_BUDGET.payers); return wrap(() => payerSummary(payTos, b.fetch), b.st); },
   };
@@ -260,6 +278,8 @@ export async function runCheck(input: CheckInput, o: { fetchImpl: typeof fetch; 
     terms: reachable ? termsList(accepts).slice(0, 20) : null,
     amount_tolerance_bps: AMOUNT_TOLERANCE_BPS,
     challenge_pay_tos: livePayTos,
+    // 0.1.6 (cinnabar): fetch time, status and content hashes of the subject URL and /.well-known/x402 responses read.
+    fetch_evidence: [...(lo.evidence ?? []), ...(po.evidence ?? [])].slice(0, 12),
     offer_signers: signers,
     // 0.1.4 (cinnabar): payTo addresses the host's /.well-known/x402 listed at check time. Only addresses are recorded,
     // not the file bytes, so a prose or formatting change never makes a report stale.

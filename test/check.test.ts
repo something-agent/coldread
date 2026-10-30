@@ -38,6 +38,12 @@ describe("runCheck", () => {
     expect(r.signals.map((s: any) => s.id)).toEqual(expect.arrayContaining(["I003", "P003"]));
     expect(["no_red_flags", "attention"]).toContain(r.overall);
     expect(r.signals.some((s: any) => s.severity === "red")).toBe(false);
+    // 0.1.6: fetch evidence for the subject URL (hashes only), never for RPC or registration fetches
+    const ev = r.freshness.fetch_evidence;
+    expect(ev.length).toBeGreaterThan(0);
+    expect(ev.every((e: any) => new URL(e.url).hostname === host && /^[0-9a-f]{64}$/.test(e.body_sha256) && e.fetched_at && e.status)).toBe(true);
+    expect(ev.some((e: any) => e.part === "probe" && e.url === `https://${host}/data` && e.status === 402)).toBe(true);
+    expect(ev.some((e: any) => e.url.includes("agent-registration"))).toBe(false);
     expect(r.freshness).toMatchObject({ checked_at: r.checked_at, challenge_pay_tos: [PAYTO], suggested_max_age_hours: 24 });
     expect(Array.isArray(r.freshness.discovery_pay_tos) || r.freshness.discovery_pay_tos === null).toBe(true);
     expect(r.freshness.terms_fingerprint.hex).toBe(await termsFingerprint(r.parts.live_challenge.accepts));
