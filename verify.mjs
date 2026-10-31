@@ -159,6 +159,8 @@ async function main() {
   }
   const r = verifyReport(env, keys);
   if (args.includes("--live") && env?.report?.subject?.url) {
+    // live_checked_at (asked by overwatch-dominion): when this --live read started, so a caller can bound a retry window on exit 4.
+    r.live_checked_at = new Date().toISOString();
     try {
       const m = env.report.subject.method === "POST" ? "POST" : "GET";
       const res = await fetch(env.report.subject.url, { method: m, headers: { "user-agent": "coldread-verify/1", ...(m === "POST" ? { "content-type": "application/json" } : {}) }, ...(m === "POST" ? { body: "{}" } : {}) });
