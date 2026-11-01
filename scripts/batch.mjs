@@ -1,5 +1,5 @@
 // ColdRead daily batch, run from the operator's box (outside Cloudflare).
-//   node scripts/batch.mjs [--date YYYY-MM-DD] [--no-anchor] [--no-payers] [--extra 0xpayto,...]
+//   node scripts/batch.mjs [--date YYYY-MM-DD] [--no-anchor] [--no-payers] [--no-funders] [--extra 0xpayto,...]
 // 1. Payer cache: public Base RPC (publicnode) rate-limits Cloudflare's shared egress, so live payer summaries often
 //    fail inside the Worker. This job reads the day's stored reports, collects payTos whose summary failed, computes
 //    the summary here, and writes KV key p:<payTo> (TTL 3 days). The Worker then serves it, labelled "cached".
@@ -23,8 +23,8 @@ const has = (k) => process.argv.includes(k);
 const date = arg("--date") ?? new Date().toISOString().slice(0, 10);
 const log = (...a) => console.error("[batch]", ...a);
 
-await build({ stdin: { contents: 'export { payerSummary } from "./src/payers"; export { payerCacheKey } from "./src/check";', resolveDir: ROOT, loader: "ts" }, bundle: true, format: "esm", platform: "neutral", outfile: "/tmp/coldread-batch.mjs", logLevel: "error", mainFields: ["module", "main"] });
-const { payerSummary, payerCacheKey } = await import("/tmp/coldread-batch.mjs?" + Date.now());
+await build({ stdin: { contents: 'export { payerSummary } from "./src/payers"; export { payerCacheKey } from "./src/check"; export { funderClusters } from "./src/funders";', resolveDir: ROOT, loader: "ts" }, bundle: true, format: "esm", platform: "neutral", outfile: "/tmp/coldread-batch.mjs", logLevel: "error", mainFields: ["module", "main"] });
+const { payerSummary, payerCacheKey, funderClusters } = await import("/tmp/coldread-batch.mjs?" + Date.now());
 
 const digests = (await (await fetch(`${BASE}/v1/digests?date=${date}`, UA)).json()).digests ?? [];
 log(`${digests.length} stored report(s) on ${date}`);
@@ -41,6 +41,11 @@ if (!has("--no-payers")) {
   for (const [k, pts] of keys) {
     try {
       const summary = await payerSummary(pts, fetch);
+      // 0.1.7 funder clustering (box only; northtape): hypothesis rows, written next to the summary
+      if (!has("--no-funders")) try {
+        const cand = (summary.payers ?? []).filter((r) => !["self", "dust", "known_sweeper"].includes(r.label)).map((r) => r.address);
+        if (cand.length >= 2) { summary.funder_clusters = await funderClusters(cand, pts, fetch); log(k, `funders: ${summary.funder_clusters.clusters.length} cluster(s), ${summary.funder_clusters.hubs_excluded.length} hub(s) excluded`); }
+      } catch (e) { log(k, "funders failed:", e.message.slice(0, 120)); }
       const val = JSON.stringify({ computed_at: new Date().toISOString(), summary });
       const r = spawnSync(join(HERE, "cf.sh"), ["kv", "key", "put", k, val, `--namespace-id=${NS}`, "--ttl=259200", "--remote"], { encoding: "utf8" });
       log(k, r.status === 0 ? `cached (${summary.inbound?.transfers ?? 0} inbound)` : `KV put failed: ${(r.stderr || r.stdout).split("\n").filter((l) => /error/i.test(l)).join(" ").slice(0, 200)}`);
