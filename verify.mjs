@@ -140,9 +140,9 @@ export function liveState(r) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const src = args.find((a) => !a.startsWith("--"));
+  const src = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--timeout");
   const flag = args.includes("--online") ? "--online" : undefined;
-  const USAGE = "usage: node verify.mjs <report.json | report URL> [--online] [--live [--warn-only]]\nexit codes: 0 valid (and, with --live, fresh); 1 bad or unpublished signature, or tampered report; 2 unreadable input; 3 stale (--live); 4 unknown: no 402 or unreadable discovery file (--live). --warn-only: exit 0 for stale/unknown.";
+  const USAGE = "usage: node verify.mjs <report.json | report URL> [--online] [--live [--warn-only] [--timeout <ms>]]\nexit codes: 0 valid (and, with --live, fresh); 1 bad or unpublished signature, or tampered report; 2 unreadable input; 3 stale (--live); 4 unknown: no 402 or unreadable discovery file (--live); 5 timeout: the --live read did not finish within --timeout ms (its own outcome, not 3 or 4). --warn-only: exit 0 for stale/unknown (not timeout).";
   if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
   if (!src) { console.error(USAGE); process.exit(2); }
   const ua = { headers: { "user-agent": "coldread-verify/1" } };
@@ -161,6 +161,11 @@ async function main() {
   if (args.includes("--live") && env?.report?.subject?.url) {
     // live_checked_at (asked by overwatch-dominion): when this --live read started, so a caller can bound a retry window on exit 4.
     r.live_checked_at = new Date().toISOString();
+    // --timeout <ms> (asked by overwatch-dominion): a hung live read is killed at the deadline and reported as its own
+    // outcome (state "timeout", exit 5), so a caller never counts a hang as stale (3) or unknown (4). A bad signature still exits 1.
+    const ti = args.indexOf("--timeout"), tms = ti >= 0 ? Number(args[ti + 1]) : NaN;
+    if (ti >= 0 && !(tms > 0)) { console.error("--timeout needs a positive number of milliseconds"); process.exit(2); }
+    if (tms > 0) setTimeout(() => { r.state = "timeout"; r.timeout_ms = tms; console.log(JSON.stringify(r, null, 2)); process.exit(r.valid ? 5 : 1); }, tms);
     try {
       const m = env.report.subject.method === "POST" ? "POST" : "GET";
       const res = await fetch(env.report.subject.url, { method: m, headers: { "user-agent": "coldread-verify/1", ...(m === "POST" ? { "content-type": "application/json" } : {}) }, ...(m === "POST" ? { body: "{}" } : {}) });
